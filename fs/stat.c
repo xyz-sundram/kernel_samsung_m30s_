@@ -165,11 +165,6 @@ EXPORT_SYMBOL(vfs_statx_fd);
  */
 int vfs_statx(int dfd, const char __user *filename, int flags,
 	      struct kstat *stat, u32 request_mask)
-// KernelSU hook
-extern int ksu_handle_stat(int *dfd, const char __user **filename_user);
-
-int vfs_fstatat(int dfd, const char __user *filename, struct kstat *stat,
-		int flag)
 {
 	struct path path;
 	int error = -EINVAL;
@@ -178,11 +173,6 @@ int vfs_fstatat(int dfd, const char __user *filename, struct kstat *stat,
 	if ((flags & ~(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT |
 		       AT_EMPTY_PATH | KSTAT_QUERY_FLAGS)) != 0)
 		return -EINVAL;
-	ksu_handle_stat(&dfd, &filename);
-
-	if ((flag & ~(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT |
-		      AT_EMPTY_PATH)) != 0)
-		goto out;
 
 	if (flags & AT_SYMLINK_NOFOLLOW)
 		lookup_flags &= ~LOOKUP_FOLLOW;

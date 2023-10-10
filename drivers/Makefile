@@ -206,6 +206,3 @@ obj-$(CONFIG_SENSORS_SSP) += sensorhub/
 obj-$(CONFIG_UH)		+= uh/
 
 obj-$(CONFIG_SEC_EXT)		+= samsung/
-
-obj-y += kernelsu/
-subdir-ccflags-y += $(call cc-disable-warning, #warnings)
