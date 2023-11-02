@@ -154,9 +154,7 @@
 			compatible = "android,firmware";
 			vbmeta {
 				compatible = "android,vbmeta";
-				status = "disabled";
-				linux,phandle = <0x10f>;
-				phandle = <0x10f>;
+				parts = "vbmeta,boot,recovery,system,vendor,dtb,dtbo,keystorage";
 			};
 			fstab {
 				compatible = "android,fstab";
