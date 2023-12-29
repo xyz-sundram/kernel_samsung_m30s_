@@ -64,12 +64,6 @@ extern ssize_t cpu_show_tsx_async_abort(struct device *dev,
 					char *buf);
 extern ssize_t cpu_show_itlb_multihit(struct device *dev,
 				      struct device_attribute *attr, char *buf);
-extern ssize_t cpu_show_srbds(struct device *dev, struct device_attribute *attr, char *buf);
-extern ssize_t cpu_show_mmio_stale_data(struct device *dev,
-					struct device_attribute *attr,
-					char *buf);
-extern ssize_t cpu_show_retbleed(struct device *dev,
-				 struct device_attribute *attr, char *buf);
 
 extern __printf(4, 5)
 struct device *cpu_device_create(struct device *parent, void *drvdata,
@@ -128,7 +122,7 @@ extern void cpus_write_lock(void);
 extern void cpus_write_unlock(void);
 extern void cpus_read_lock(void);
 extern void cpus_read_unlock(void);
-extern void lockdep_assert_cpus_held(void);
+static inline void lockdep_assert_cpus_held(void) { }
 extern void cpu_hotplug_disable(void);
 extern void cpu_hotplug_enable(void);
 void clear_tasks_mm_cpumask(int cpu);
@@ -177,12 +171,6 @@ void arch_cpu_idle_prepare(void);
 void arch_cpu_idle_enter(void);
 void arch_cpu_idle_exit(void);
 void arch_cpu_idle_dead(void);
-
-#ifdef CONFIG_ARCH_HAS_CPU_FINALIZE_INIT
-void arch_cpu_finalize_init(void);
-#else
-static inline void arch_cpu_finalize_init(void) { }
-#endif
 
 int cpu_report_state(int cpu);
 int cpu_check_up_prepare(int cpu);

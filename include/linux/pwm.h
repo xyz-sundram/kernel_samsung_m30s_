@@ -44,8 +44,31 @@ struct pwm_args {
 };
 
 enum {
-	PWMF_REQUESTED = 0,
-	PWMF_EXPORTED = 1,
+	PWMF_REQUESTED = 1 << 0,
+	PWMF_EXPORTED = 1 << 1,
+};
+
+/**
+ * enum pwm_output_type - output type of the PWM signal
+ * @PWM_OUTPUT_FIXED: PWM output is fixed until a change request
+ * @PWM_OUTPUT_MODULATED: PWM output is modulated in hardware
+ * autonomously with a predefined pattern
+ */
+enum pwm_output_type {
+	PWM_OUTPUT_FIXED = 1 << 0,
+	PWM_OUTPUT_MODULATED = 1 << 1,
+};
+
+/**
+ * struct pwm_output_pattern - PWM duty pattern for MODULATED duty type
+ * @duty_pattern: PWM duty cycles in the pattern for duty modulation
+ * @num_entries: number of entries in the pattern
+ * @cycles_per_duty: number of PWM period cycles an entry stays at
+ */
+struct pwm_output_pattern {
+	u64 *duty_pattern;
+	unsigned int num_entries;
+	u64 cycles_per_duty;
 };
 
 /*
@@ -56,9 +79,11 @@ enum {
  * @enabled: PWM enabled status
  */
 struct pwm_state {
-	unsigned int period;
-	unsigned int duty_cycle;
+	u64 period;
+	u64 duty_cycle;
 	enum pwm_polarity polarity;
+	enum pwm_output_type output_type;
+	struct pwm_output_pattern *output_pattern;
 	bool enabled;
 };
 

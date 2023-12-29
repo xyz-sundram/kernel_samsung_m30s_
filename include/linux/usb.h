@@ -279,11 +279,6 @@ void usb_put_intf(struct usb_interface *intf);
 #define USB_MAXINTERFACES	32
 #define USB_MAXIADS		(USB_MAXINTERFACES/2)
 
-bool usb_check_bulk_endpoints(
-		const struct usb_interface *intf, const u8 *ep_addrs);
-bool usb_check_int_endpoints(
-		const struct usb_interface *intf, const u8 *ep_addrs);
-
 /*
  * USB Resume Timer: Every Host controller driver should drive the resume
  * signalling on the bus for the amount of time defined by this macro.
@@ -547,6 +542,37 @@ struct usb3_lpm_parameters {
 	int timeout;
 };
 
+struct hcd_hw_info {
+	/* for XHCI */
+	int slot_id;
+	dma_addr_t erst_addr;
+	dma_addr_t dcbaa_dma;
+	dma_addr_t in_ctx;
+	dma_addr_t out_ctx;
+	dma_addr_t save_dma;
+	u64 cmd_ring;
+	/* Data Stream EP */
+	u64 old_out_deq;
+	u64 old_in_deq;
+	u64 out_deq;
+	u64 in_deq;
+	int in_ep;
+	int out_ep;
+	/* feedback ep */
+	int fb_in_ep;
+	int fb_out_ep;
+	u64 fb_old_out_deq;
+	u64 fb_old_in_deq;
+	u64 fb_out_deq;
+	u64 fb_in_deq;
+	/* Device Common Information */
+	int speed;
+	void *out_buf;
+	u64 out_dma;
+	void *in_buf;
+	u64 in_dma;
+};
+
 /**
  * struct usb_device - kernel's representation of a USB device
  * @devnum: device number; address on a USB bus
@@ -573,7 +599,6 @@ struct usb3_lpm_parameters {
  * @level: number of USB hub ancestors
  * @can_submit: URBs may be submitted
  * @persist_enabled:  USB_PERSIST enabled for this device
- * @reset_in_progress: the device is being reset
  * @have_langid: whether string_langid is valid
  * @authorized: policy has said we can use it;
  *	(user space) policy determines if we authorize this device to be
@@ -645,6 +670,9 @@ struct usb_device {
 	struct usb_host_endpoint *ep_out[16];
 
 	char **rawdescriptors;
+	int rawdesc_length;
+
+	struct hcd_hw_info hwinfo;
 
 	unsigned short bus_mA;
 	u8 portnum;
@@ -652,7 +680,6 @@ struct usb_device {
 
 	unsigned can_submit:1;
 	unsigned persist_enabled:1;
-	unsigned reset_in_progress:1;
 	unsigned have_langid:1;
 	unsigned authorized:1;
 	unsigned authenticated:1;
