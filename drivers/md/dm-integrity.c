@@ -3156,6 +3156,8 @@ static int dm_integrity_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	}
 
 	if (should_write_sb) {
+		int r;
+
 		init_journal(ic, 0, ic->journal_sections, 0);
 		r = dm_integrity_failed(ic);
 		if (unlikely(r)) {
@@ -3274,13 +3276,11 @@ int __init dm_integrity_init(void)
 	}
 
 	r = dm_register_target(&integrity_target);
-	if (r < 0) {
-		DMERR("register failed %d", r);
-		kmem_cache_destroy(journal_io_cache);
-		return r;
-	}
 
-	return 0;
+	if (r < 0)
+		DMERR("register failed %d", r);
+
+	return r;
 }
 
 void dm_integrity_exit(void)

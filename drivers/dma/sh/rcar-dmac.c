@@ -1333,7 +1333,6 @@ static enum dma_status rcar_dmac_tx_status(struct dma_chan *chan,
 	enum dma_status status;
 	unsigned long flags;
 	unsigned int residue;
-	bool cyclic;
 
 	status = dma_cookie_status(chan, cookie, txstate);
 	if (status == DMA_COMPLETE || !txstate)
@@ -1341,11 +1340,10 @@ static enum dma_status rcar_dmac_tx_status(struct dma_chan *chan,
 
 	spin_lock_irqsave(&rchan->lock, flags);
 	residue = rcar_dmac_chan_get_residue(rchan, cookie);
-	cyclic = rchan->desc.running ? rchan->desc.running->cyclic : false;
 	spin_unlock_irqrestore(&rchan->lock, flags);
 
 	/* if there's no residue, the cookie is complete */
-	if (!residue && !cyclic)
+	if (!residue)
 		return DMA_COMPLETE;
 
 	dma_set_residue(txstate, residue);
@@ -1766,13 +1764,8 @@ static int rcar_dmac_probe(struct platform_device *pdev)
 	dmac->dev = &pdev->dev;
 	platform_set_drvdata(pdev, dmac);
 	dmac->dev->dma_parms = &dmac->parms;
-	ret = dma_set_max_seg_size(dmac->dev, RCAR_DMATCR_MASK);
-	if (ret)
-		return ret;
-
-	ret = dma_set_mask_and_coherent(dmac->dev, DMA_BIT_MASK(40));
-	if (ret)
-		return ret;
+	dma_set_max_seg_size(dmac->dev, RCAR_DMATCR_MASK);
+	dma_set_mask_and_coherent(dmac->dev, DMA_BIT_MASK(40));
 
 	ret = rcar_dmac_parse_of(&pdev->dev, dmac);
 	if (ret < 0)

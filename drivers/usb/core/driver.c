@@ -866,7 +866,15 @@ static int usb_uevent(struct device *dev, struct kobj_uevent_env *env)
 			   usb_dev->descriptor.bDeviceSubClass,
 			   usb_dev->descriptor.bDeviceProtocol))
 		return -ENOMEM;
-
+#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
+	pr_info("usb_host : %s: PRODUCT=%x/%x/%x TYPE=%d/%d/%d\n", __func__,
+			   le16_to_cpu(usb_dev->descriptor.idVendor),
+			   le16_to_cpu(usb_dev->descriptor.idProduct),
+			   le16_to_cpu(usb_dev->descriptor.bcdDevice),
+			   usb_dev->descriptor.bDeviceClass,
+			   usb_dev->descriptor.bDeviceSubClass,
+			   usb_dev->descriptor.bDeviceProtocol);
+#endif
 	return 0;
 }
 
@@ -1878,10 +1886,13 @@ int usb_runtime_idle(struct device *dev)
 	return -EBUSY;
 }
 
-static int usb_set_usb2_hardware_lpm(struct usb_device *udev, int enable)
+int usb_set_usb2_hardware_lpm(struct usb_device *udev, int enable)
 {
 	struct usb_hcd *hcd = bus_to_hcd(udev->bus);
 	int ret = -EPERM;
+
+	if (enable && !udev->usb2_hw_lpm_allowed)
+		return 0;
 
 	if (hcd->driver->set_usb2_hw_lpm) {
 		ret = hcd->driver->set_usb2_hw_lpm(hcd, udev, enable);
@@ -1890,24 +1901,6 @@ static int usb_set_usb2_hardware_lpm(struct usb_device *udev, int enable)
 	}
 
 	return ret;
-}
-
-int usb_enable_usb2_hardware_lpm(struct usb_device *udev)
-{
-	if (!udev->usb2_hw_lpm_capable ||
-	    !udev->usb2_hw_lpm_allowed ||
-	    udev->usb2_hw_lpm_enabled)
-		return 0;
-
-	return usb_set_usb2_hardware_lpm(udev, 1);
-}
-
-int usb_disable_usb2_hardware_lpm(struct usb_device *udev)
-{
-	if (!udev->usb2_hw_lpm_enabled)
-		return 0;
-
-	return usb_set_usb2_hardware_lpm(udev, 0);
 }
 
 #endif /* CONFIG_PM */

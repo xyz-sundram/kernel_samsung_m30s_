@@ -339,13 +339,9 @@ static struct sk_buff *page_to_skb(struct virtnet_info *vi,
 	offset += hdr_padded_len;
 	p += hdr_padded_len;
 
-	/* Copy all frame if it fits skb->head, otherwise
-	 * we let virtio_net_hdr_to_skb() and GRO pull headers as needed.
-	 */
-	if (len <= skb_tailroom(skb))
-		copy = len;
-	else
-		copy = ETH_HLEN;
+	copy = len;
+	if (copy > skb_tailroom(skb))
+		copy = skb_tailroom(skb);
 	skb_put_data(skb, p, copy);
 
 	len -= copy;
@@ -452,13 +448,8 @@ static struct page *xdp_linearize_page(struct receive_queue *rq,
 				       int page_off,
 				       unsigned int *len)
 {
-	int tailroom = SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
-	struct page *page;
+	struct page *page = alloc_page(GFP_ATOMIC);
 
-	if (page_off + *len + tailroom > PAGE_SIZE)
-		return NULL;
-
-	page = alloc_page(GFP_ATOMIC);
 	if (!page)
 		return NULL;
 
@@ -1271,7 +1262,7 @@ static int xmit_skb(struct send_queue *sq, struct sk_buff *skb)
 	if (virtio_net_hdr_from_skb(skb, &hdr->hdr,
 				    virtio_is_little_endian(vi->vdev), false,
 				    0))
-		return -EPROTO;
+		BUG();
 
 	if (vi->mergeable_rx_bufs)
 		hdr->num_buffers = 0;
@@ -2774,11 +2765,8 @@ static __maybe_unused int virtnet_restore(struct virtio_device *vdev)
 	virtnet_set_queues(vi, vi->curr_queue_pairs);
 
 	err = virtnet_cpu_notif_add(vi);
-	if (err) {
-		virtnet_freeze_down(vdev);
-		remove_vq_common(vi);
+	if (err)
 		return err;
-	}
 
 	return 0;
 }

@@ -678,7 +678,7 @@ static int get_rx_bufs(struct vhost_virtqueue *vq,
 	/* len is always initialized before use since we are always called with
 	 * datalen > 0.
 	 */
-	u32 len;
+	u32 uninitialized_var(len);
 
 	while (datalen > 0 && headcount < quota) {
 		if (unlikely(seg >= UIO_MAXIOV)) {
@@ -735,7 +735,7 @@ static void handle_rx(struct vhost_net *net)
 {
 	struct vhost_net_virtqueue *nvq = &net->vqs[VHOST_NET_VQ_RX];
 	struct vhost_virtqueue *vq = &nvq->vq;
-	unsigned in, log;
+	unsigned uninitialized_var(in), log;
 	struct vhost_log *vq_log;
 	struct msghdr msg = {
 		.msg_name = NULL,
@@ -1047,9 +1047,13 @@ err:
 	return ERR_PTR(r);
 }
 
-static struct skb_array *get_tap_skb_array(struct file *file)
+static struct skb_array *get_tap_skb_array(int fd)
 {
 	struct skb_array *array;
+	struct file *file = fget(fd);
+
+	if (!file)
+		return NULL;
 	array = tun_get_skb_array(file);
 	if (!IS_ERR(array))
 		goto out;
@@ -1058,6 +1062,7 @@ static struct skb_array *get_tap_skb_array(struct file *file)
 		goto out;
 	array = NULL;
 out:
+	fput(file);
 	return array;
 }
 
@@ -1138,12 +1143,8 @@ static long vhost_net_set_backend(struct vhost_net *n, unsigned index, int fd)
 		vhost_net_disable_vq(n, vq);
 		vq->private_data = sock;
 		vhost_net_buf_unproduce(nvq);
-		if (index == VHOST_NET_VQ_RX) {
-			if (sock)
-				nvq->rx_array = get_tap_skb_array(sock->file);
-			else
-				nvq->rx_array = NULL;
-		}
+		if (index == VHOST_NET_VQ_RX)
+			nvq->rx_array = get_tap_skb_array(fd);
 		r = vhost_vq_init_access(vq);
 		if (r)
 			goto err_used;

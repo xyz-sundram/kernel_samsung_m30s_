@@ -94,6 +94,8 @@ static bool match_index(struct hid_usage *usage,
 typedef bool (*hid_usage_cmp_t)(struct hid_usage *usage,
 				unsigned int cur_idx, unsigned int val);
 
+extern bool lcd_is_on;
+
 static struct hid_usage *hidinput_find_key(struct hid_device *hid,
 					   hid_usage_cmp_t match,
 					   unsigned int value,
@@ -425,6 +427,8 @@ static int hidinput_get_battery_property(struct power_supply *psy,
 
 		if (dev->battery_status == HID_BATTERY_UNKNOWN)
 			val->intval = POWER_SUPPLY_STATUS_UNKNOWN;
+		else if (dev->battery_capacity == 100)
+			val->intval = POWER_SUPPLY_STATUS_FULL;
 		else
 			val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
 		break;
@@ -1026,8 +1030,6 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 		case 0x28b: map_key_clear(KEY_FORWARDMAIL);	break;
 		case 0x28c: map_key_clear(KEY_SEND);		break;
 
-		case 0x2a2: map_key_clear(KEY_ALL_APPLICATIONS);	break;
-
 		case 0x2c7: map_key_clear(KEY_KBDINPUTASSIST_PREV);		break;
 		case 0x2c8: map_key_clear(KEY_KBDINPUTASSIST_NEXT);		break;
 		case 0x2c9: map_key_clear(KEY_KBDINPUTASSIST_PREVGROUP);		break;
@@ -1132,7 +1134,7 @@ mapped:
 		 */
 		return;
 	}
-
+	
 	set_bit(usage->type, input->evbit);
 
 	while (usage->code <= max && test_and_set_bit(usage->code, bit))
@@ -1437,6 +1439,12 @@ static void hidinput_led_worker(struct work_struct *work)
 	buf = hid_alloc_report_buf(report, GFP_KERNEL);
 	if (!buf)
 		return;
+
+	if(!lcd_is_on){
+        printk(KERN_DEBUG "lcd is off, don't report LED event\n");
+		kfree(buf);
+		return;
+	}
 
 	hid_output_report(report, buf);
 	/* synchronous output report */

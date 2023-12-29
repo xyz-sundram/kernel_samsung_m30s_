@@ -374,7 +374,7 @@ static int dmar_pci_bus_notifier(struct notifier_block *nb,
 
 static struct notifier_block dmar_pci_bus_nb = {
 	.notifier_call = dmar_pci_bus_notifier,
-	.priority = 1,
+	.priority = INT_MIN,
 };
 
 static struct dmar_drhd_unit *
@@ -804,7 +804,6 @@ int __init dmar_dev_scope_init(void)
 			info = dmar_alloc_pci_notify_info(dev,
 					BUS_NOTIFY_ADD_DEVICE);
 			if (!info) {
-				pci_dev_put(dev);
 				return dmar_dev_scope_status;
 			} else {
 				dmar_pci_bus_add_dev(info);
@@ -1117,7 +1116,7 @@ static int alloc_iommu(struct dmar_drhd_unit *drhd)
 
 		err = iommu_device_register(&iommu->iommu);
 		if (err)
-			goto err_sysfs;
+			goto err_unmap;
 	}
 
 	drhd->iommu = iommu;
@@ -1125,8 +1124,6 @@ static int alloc_iommu(struct dmar_drhd_unit *drhd)
 
 	return 0;
 
-err_sysfs:
-	iommu_device_sysfs_remove(&iommu->iommu);
 err_unmap:
 	unmap_iommu(iommu);
 error_free_seq_id:

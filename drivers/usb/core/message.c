@@ -19,6 +19,7 @@
 #include <linux/usb/quirks.h>
 #include <linux/usb/hcd.h>	/* for usbcore internals */
 #include <asm/byteorder.h>
+#include <linux/usb_notify.h>
 
 #include "usb.h"
 
@@ -1218,7 +1219,8 @@ void usb_disable_device(struct usb_device *dev, int skip_ep0)
 			dev->actconfig->interface[i] = NULL;
 		}
 
-		usb_disable_usb2_hardware_lpm(dev);
+		if (dev->usb2_hw_lpm_enabled == 1)
+			usb_set_usb2_hardware_lpm(dev, 0);
 		usb_unlocked_disable_lpm(dev);
 		usb_disable_ltm(dev);
 
@@ -1952,6 +1954,11 @@ free_interfaces:
 			continue;
 		}
 		create_intf_ep_devs(intf);
+		if (dev->bus->root_hub != dev) {
+			store_usblog_notify(NOTIFY_PORT_CLASS,
+				(void *)&dev->descriptor.bDeviceClass,
+				(void *)&intf->cur_altsetting->desc.bInterfaceClass);
+		}
 	}
 
 	usb_autosuspend_device(dev);

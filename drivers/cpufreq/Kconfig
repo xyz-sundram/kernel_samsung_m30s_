@@ -80,7 +80,7 @@ config CPU_FREQ_DEFAULT_GOV_USERSPACE
 config CPU_FREQ_DEFAULT_GOV_ONDEMAND
 	bool "ondemand"
 	select CPU_FREQ_GOV_ONDEMAND
-	select CPU_FREQ_GOV_PERFORMANCE
+	select CPU_FREQ_GOV_SCHEDUTIL
 	help
 	  Use the CPUFreq governor 'ondemand' as default. This allows
 	  you to get a full dynamic frequency capable system by simply
@@ -92,7 +92,7 @@ config CPU_FREQ_DEFAULT_GOV_ONDEMAND
 config CPU_FREQ_DEFAULT_GOV_CONSERVATIVE
 	bool "conservative"
 	select CPU_FREQ_GOV_CONSERVATIVE
-	select CPU_FREQ_GOV_PERFORMANCE
+	select CPU_FREQ_GOV_SCHEDUTIL
 	help
 	  Use the CPUFreq governor 'conservative' as default. This allows
 	  you to get a full dynamic frequency capable system by simply
@@ -105,9 +105,17 @@ config CPU_FREQ_DEFAULT_GOV_SCHEDUTIL
 	bool "schedutil"
 	depends on SMP
 	select CPU_FREQ_GOV_SCHEDUTIL
-	select CPU_FREQ_GOV_PERFORMANCE
 	help
 	  Use the 'schedutil' CPUFreq governor by default. If unsure,
+	  have a look at the help section of that governor. The fallback
+	  governor will be 'performance'.
+
+config CPU_FREQ_DEFAULT_GOV_BLU_SCHEDUTIL
+	bool "blu_schedutil"
+	select CPU_FREQ_GOV_BLU_SCHEDUTIL
+	select CPU_FREQ_GOV_PERFORMANCE
+	help
+	  Use the 'blu_schedutil' CPUFreq governor by default. If unsure,
 	  have a look at the help section of that governor. The fallback
 	  governor will be 'performance'.
 
@@ -209,7 +217,47 @@ config CPU_FREQ_GOV_SCHEDUTIL
 
 	  If in doubt, say N.
 
+config FREQVAR_TUNE
+	bool "CPU frequency variant tuner"
+	depends on SCHED_EMS && CPU_FREQ_GOV_SCHEDUTIL
+	help
+	  This option provides the controller which tunes system performance
+	  as frequency variant.
+
+	  Say N if unsure.
+
+config CPU_FREQ_GOV_BLU_SCHEDUTIL
+	tristate "'blu_schedutil' cpufreq policy governor"
+	depends on CPU_FREQ
+	select CPU_FREQ_GOV_ATTR_SET
+	select IRQ_WORK
+	help
+	  This governor makes decisions based on the utilization data provided
+	  by the scheduler.  It sets the CPU frequency to be proportional to
+	  the utilization/capacity ratio coming from the scheduler.  If the
+	  utilization is frequency-invariant, the new frequency is also
+	  proportional to the maximum available frequency.  If that is not the
+	  case, it is proportional to the current frequency of the CPU.  The
+	  frequency tipping point is at utilization/capacity equal to 80% in
+	  both cases.
+
+	  To compile this driver as a module, choose M here: the module will
+	  be called cpufreq_blu_schedutil.
+
+	  If in doubt, say N.
+
 comment "CPU frequency scaling drivers"
+
+config CPU_BOOST
+	tristate "Event base short term CPU freq boost"
+	depends on CPU_FREQ
+	help
+	  This driver boosts the frequency of one or more CPUs based on
+	  various events that might occur in the system. As of now, the
+	  events it reacts to are:
+	  - Migration of important threads from one CPU to another.
+
+	  If in doubt, say N.
 
 config CPUFREQ_DT
 	tristate "Generic DT based cpufreq driver"
@@ -234,14 +282,11 @@ config CPUFREQ_DT_PLATDEV
 
 	  If in doubt, say N.
 
-config CPUFREQ_DUMMY
-	tristate "Dummy CPU frequency driver"
+config FINGERPRINT_BOOST
+	bool "Fingerprint Boost"
+	default n
 	help
-	  This option adds a generic dummy CPUfreq driver, which sets a fake
-	  2-frequency table when initializing each policy and otherwise does
-	  nothing.
-
-	  If in doubt, say N
+	  Boosts available CPUs to max frequency on fingerprint sensor input.
 
 if X86
 source "drivers/cpufreq/Kconfig.x86"
@@ -358,6 +403,42 @@ config QORIQ_CPUFREQ
 	help
 	  This adds the CPUFreq driver support for Freescale QorIQ SoCs
 	  which are capable of changing the CPU's frequency dynamically.
+
+comment "P-state Boost Solutions"
+
+choice EXYNOS_PSTATE
+	prompt "P-state Boost Solution"
+	default EXYNOS_PSTATE_DISABLE
+	depends on ARCH_EXYNOS
+	depends on CPU_FREQ
+	help
+	  Default status of P-state boost is disable.
+
+config EXYNOS_PSTATE_DISABLE
+	bool "disable"
+	help
+	  This option sets P-state boost solution as disable.
+	  If in doubt, set this config.
+
+config EXYNOS_PSTATE_HAFM
+	bool "Exynos HAFM"
+	help
+	  This option sets P-state boost solution as HAFM.
+	  The config makes HIU just deliver frequency level and power budget
+	  given from CPUFreq driver and register set.
+
+config EXYNOS_PSTATE_HAFM_TB
+	bool "Exynos HAFM-TB"
+	help
+	  This option sets P-state boost solution as HAFM-TB.
+
+config EXYNOS_PSTATE_MODE_CHANGER
+	bool "Exynos Mode Changer"
+	depends on HOTPLUG_CPU
+	help
+	  This option sets P-state boost solution as EMC.
+
+endchoice
 
 endif
 endmenu
