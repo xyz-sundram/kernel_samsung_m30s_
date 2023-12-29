@@ -1612,8 +1612,7 @@ blk_trace_event_print_binary(struct trace_iterator *iter, int flags,
 
 static enum print_line_t blk_tracer_print_line(struct trace_iterator *iter)
 {
-	if ((iter->ent->type != TRACE_BLK) ||
-	    !(blk_tracer_flags.val & TRACE_BLK_OPT_CLASSIC))
+	if (!(blk_tracer_flags.val & TRACE_BLK_OPT_CLASSIC))
 		return TRACE_TYPE_UNHANDLED;
 
 	return print_one_line(iter, true);
@@ -1679,14 +1678,6 @@ static int blk_trace_remove_queue(struct request_queue *q)
 	bt = xchg(&q->blk_trace, NULL);
 	if (bt == NULL)
 		return -EINVAL;
-
-	if (bt->trace_state == Blktrace_running) {
-		bt->trace_state = Blktrace_stopped;
-		spin_lock_irq(&running_trace_lock);
-		list_del_init(&bt->running_list);
-		spin_unlock_irq(&running_trace_lock);
-		relay_flush(bt->rchan);
-	}
 
 	put_probe_ref();
 	synchronize_rcu();
@@ -1981,6 +1972,7 @@ void blk_trace_remove_sysfs(struct device *dev)
 #endif /* CONFIG_BLK_DEV_IO_TRACE */
 
 #ifdef CONFIG_EVENT_TRACING
+SIO_PATCH_VERSION(ftrace_discard_bugfix, 1, 0, "");
 
 void blk_fill_rwbs(char *rwbs, unsigned int op, int bytes)
 {
@@ -1990,16 +1982,16 @@ void blk_fill_rwbs(char *rwbs, unsigned int op, int bytes)
 		rwbs[i++] = 'F';
 
 	switch (op & REQ_OP_MASK) {
-	case REQ_OP_WRITE:
-	case REQ_OP_WRITE_SAME:
-		rwbs[i++] = 'W';
-		break;
 	case REQ_OP_DISCARD:
 		rwbs[i++] = 'D';
 		break;
 	case REQ_OP_SECURE_ERASE:
 		rwbs[i++] = 'D';
 		rwbs[i++] = 'E';
+		break;
+	case REQ_OP_WRITE:
+	case REQ_OP_WRITE_SAME:
+		rwbs[i++] = 'W';
 		break;
 	case REQ_OP_FLUSH:
 		rwbs[i++] = 'F';
