@@ -327,6 +327,10 @@ static int ddebug_parse_query(char *words[], int nwords,
 	}
 	memset(query, 0, sizeof(*query));
 
+	if (modname)
+		/* support $modname.dyndbg=<multiple queries> */
+		query->module = modname;
+
 	for (i = 0; i < nwords; i += 2) {
 		if (!strcmp(words[i], "func")) {
 			rc = check_set(&query->function, words[i+1], "func");
@@ -375,13 +379,6 @@ static int ddebug_parse_query(char *words[], int nwords,
 		if (rc)
 			return rc;
 	}
-	if (!query->module && modname)
-		/*
-		 * support $modname.dyndbg=<multiple queries>, when
-		 * not given in the query itself
-		 */
-		query->module = modname;
-
 	vpr_info_dq(query, "parsed");
 	return 0;
 }
@@ -956,26 +953,22 @@ static void ddebug_remove_all_tables(void)
 
 static __initdata int ddebug_init_success;
 
-static int __init dynamic_debug_init_control(void)
+static int __init dynamic_debug_init_debugfs(void)
 {
-	struct proc_dir_entry *procfs_dir;
-	struct dentry *debugfs_dir;
+	struct dentry *dir, *file;
 
 	if (!ddebug_init_success)
 		return -ENODEV;
 
-	/* Create the control file in debugfs if it is enabled */
-	if (debugfs_initialized()) {
-		debugfs_dir = debugfs_create_dir("dynamic_debug", NULL);
-		debugfs_create_file("control", 0644, debugfs_dir, NULL,
-				    &ddebug_proc_fops);
+	dir = debugfs_create_dir("dynamic_debug", NULL);
+	if (!dir)
+		return -ENOMEM;
+	file = debugfs_create_file("control", 0644, dir, NULL,
+					&ddebug_proc_fops);
+	if (!file) {
+		debugfs_remove(dir);
+		return -ENOMEM;
 	}
-
-	/* Also create the control file in procfs */
-	procfs_dir = proc_mkdir("dynamic_debug", NULL);
-	if (procfs_dir)
-		proc_create("control", 0644, procfs_dir, &ddebug_proc_fops);
-
 	return 0;
 }
 
@@ -988,7 +981,7 @@ static int __init dynamic_debug_init(void)
 	int n = 0, entries = 0, modct = 0;
 	int verbose_bytes = 0;
 
-	if (&__start___verbose == &__stop___verbose) {
+	if (__start___verbose == __stop___verbose) {
 		pr_warn("_ddebug table is empty in a CONFIG_DYNAMIC_DEBUG build\n");
 		return 1;
 	}
@@ -1052,4 +1045,4 @@ out_err:
 early_initcall(dynamic_debug_init);
 
 /* Debugfs setup must be done later */
-fs_initcall(dynamic_debug_init_control);
+fs_initcall(dynamic_debug_init_debugfs);

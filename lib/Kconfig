@@ -16,6 +16,7 @@ config BITREVERSE
 config HAVE_ARCH_BITREVERSE
 	bool
 	default n
+	depends on BITREVERSE
 	help
 	  This option enables the use of hardware bit-reversal instructions on
 	  architectures which support such operations.
@@ -588,5 +589,20 @@ config PRIME_NUMBERS
 
 config STRING_SELFTEST
 	bool "Test string functions"
+
+config KAIR
+	bool
+	default n
+	help
+	  Library to support KAIR class as the realization of Elastic Capacity
+	  Vessel abstract theory.
+
+config SCHED_KAIR_GLUE
+	bool
+	depends on KAIR
+	default n
+	help
+	  Glue interface sticking edge of CFS scheduler and smoother governor
+	  working based on KAIR concept strategy.
 
 endmenu
