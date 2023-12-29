@@ -32,6 +32,7 @@
 #include <crypto/rng.h>
 #include <crypto/drbg.h>
 #include <crypto/akcipher.h>
+#include <crypto/diskcipher.h>
 #include <crypto/kpp.h>
 #include <crypto/acompress.h>
 
@@ -1682,6 +1683,150 @@ out:
 	return err;
 }
 
+#ifdef CONFIG_CRYPTO_DISKCIPHER
+static int __test_diskcipher(struct crypto_diskcipher *tfm, int enc,
+			   const struct cipher_testvec *template, unsigned int tcount,
+			   const int align_offset)
+{
+	const char *algo =
+		crypto_tfm_alg_driver_name(crypto_diskcipher_tfm(tfm));
+	unsigned int i, j;
+	char *q;
+	struct scatterlist sg[8];
+	struct scatterlist sgout[8];
+	const char *e = (enc == ENCRYPT) ? "encryption" : "decryption";
+	struct tcrypt_result result;
+	void *data;
+	char iv[MAX_IVLEN];
+	char *xbuf[XBUFSIZE];
+	char *xoutbuf[XBUFSIZE];
+	int ret = -ENOMEM;
+	unsigned int ivsize = crypto_diskcipher_ivsize(tfm);
+	struct diskcipher_test_request req;
+
+	if (testmgr_alloc_buf(xbuf))
+		goto out_nobuf;
+
+	if (testmgr_alloc_buf(xoutbuf))
+		goto out_nooutbuf;
+
+	init_completion(&result.completion);
+
+	j = 0;
+	for (i = 0; i < tcount; i++) {
+		if (template[i].np && !template[i].also_non_np)
+			continue;
+
+		if (template[i].fips_skip)
+			continue;
+
+		if (template[i].iv)
+			memcpy(iv, template[i].iv, ivsize);
+		else
+			memset(iv, 0, MAX_IVLEN);
+
+		j++;
+		ret = -EINVAL;
+		if (WARN_ON(align_offset + template[i].ilen > PAGE_SIZE))
+			goto out;
+
+		ret = crypto_diskcipher_setkey(tfm, template[i].key,
+					     template[i].klen, 0);
+		if (ret == -ENOKEY) {
+			pr_err("alg: diskcipher: no support %d keylen for %s. skip it\n",
+			       template[i].klen, algo);
+			continue;
+		} else if (ret) {
+			pr_err("alg: diskcipher: setkey failed on test %d for %s\n",
+				   j, algo);
+			goto out;
+		}
+
+		data = xbuf[0];
+		data += align_offset;
+		memcpy(data, template[i].input, template[i].ilen);
+		sg_init_one(&sg[0], data, template[i].ilen);
+
+		data = xoutbuf[0];
+		data += align_offset;
+		sg_init_one(&sgout[0], data, template[i].ilen);
+
+		diskcipher_request_set_crypt(&req, sg, sgout,
+				template[i].ilen, iv, enc ? 1 : 0);
+		ret = diskcipher_do_crypt(tfm, &req);
+		if (ret) {
+			pr_err("alg: diskcipher: %s failed on test %d for %s: ret=%d\n",
+				   e, j, algo, -ret);
+			goto out;
+		}
+
+		q = data;
+		if (memcmp(q, template[i].result, template[i].rlen)) {
+			pr_err("alg: diskcipher: Test %d failed (invalid result) on %s for %s\n",
+			       j, e, algo);
+			hexdump(q, template[i].rlen);
+			ret = -EINVAL;
+			goto out;
+		}
+	}
+	ret = 0;
+
+out:
+	testmgr_free_buf(xoutbuf);
+out_nooutbuf:
+	testmgr_free_buf(xbuf);
+out_nobuf:
+	return ret;
+}
+
+static int test_diskcipher(struct crypto_diskcipher *tfm, int enc,
+			 const struct cipher_testvec *template,
+			 unsigned int tcount)
+{
+	int ret;
+
+	ret = __test_diskcipher(tfm, enc, template, tcount, 0);
+	if (ret)
+		return ret;
+
+	/* test unaligned buffers, check with one byte offset */
+	ret = __test_diskcipher(tfm, enc, template, tcount, 1);
+	if (ret)
+		return ret;
+
+	return 0;
+}
+
+static int alg_test_diskcipher(const struct alg_test_desc *desc,
+			     const char *driver, u32 type, u32 mask)
+{
+	struct crypto_diskcipher *tfm;
+	int err = 0;
+
+	tfm = crypto_alloc_diskcipher(driver, type | CRYPTO_ALG_INTERNAL, mask, 0);
+	if (!tfm || IS_ERR(tfm)) {
+		pr_err("alg: diskcipher: Failed to load transform for %s: %ld\n",
+			driver, PTR_ERR(tfm));
+		return PTR_ERR(tfm);
+	}
+
+	if (desc->suite.cipher.enc.vecs) {
+		err = test_diskcipher(tfm, ENCRYPT, desc->suite.cipher.enc.vecs,
+				    desc->suite.cipher.enc.count);
+		if (err)
+			goto out;
+	}
+
+	if (desc->suite.cipher.dec.vecs)
+		err = test_diskcipher(tfm, DECRYPT, desc->suite.cipher.dec.vecs,
+				    desc->suite.cipher.dec.count);
+
+out:
+	crypto_free_diskcipher(tfm);
+	return err;
+}
+#endif
+
 static int alg_test_aead(const struct alg_test_desc *desc, const char *driver,
 			 u32 type, u32 mask)
 {
@@ -1807,9 +1952,8 @@ static int alg_test_comp(const struct alg_test_desc *desc, const char *driver,
 	return err;
 }
 
-static int __alg_test_hash(const struct hash_testvec *template,
-			   unsigned int tcount, const char *driver,
-			   u32 type, u32 mask)
+static int alg_test_hash(const struct alg_test_desc *desc, const char *driver,
+			 u32 type, u32 mask)
 {
 	struct crypto_ahash *tfm;
 	int err;
@@ -1821,48 +1965,13 @@ static int __alg_test_hash(const struct hash_testvec *template,
 		return PTR_ERR(tfm);
 	}
 
-	err = test_hash(tfm, template, tcount, true);
+	err = test_hash(tfm, desc->suite.hash.vecs,
+			desc->suite.hash.count, true);
 	if (!err)
-		err = test_hash(tfm, template, tcount, false);
+		err = test_hash(tfm, desc->suite.hash.vecs,
+				desc->suite.hash.count, false);
+
 	crypto_free_ahash(tfm);
-	return err;
-}
-
-static int alg_test_hash(const struct alg_test_desc *desc, const char *driver,
-			 u32 type, u32 mask)
-{
-	const struct hash_testvec *template = desc->suite.hash.vecs;
-	unsigned int tcount = desc->suite.hash.count;
-	unsigned int nr_unkeyed, nr_keyed;
-	int err;
-
-	/*
-	 * For OPTIONAL_KEY algorithms, we have to do all the unkeyed tests
-	 * first, before setting a key on the tfm.  To make this easier, we
-	 * require that the unkeyed test vectors (if any) are listed first.
-	 */
-
-	for (nr_unkeyed = 0; nr_unkeyed < tcount; nr_unkeyed++) {
-		if (template[nr_unkeyed].ksize)
-			break;
-	}
-	for (nr_keyed = 0; nr_unkeyed + nr_keyed < tcount; nr_keyed++) {
-		if (!template[nr_unkeyed + nr_keyed].ksize) {
-			pr_err("alg: hash: test vectors for %s out of order, "
-			       "unkeyed ones must come first\n", desc->alg);
-			return -EINVAL;
-		}
-	}
-
-	err = 0;
-	if (nr_unkeyed) {
-		err = __alg_test_hash(template, nr_unkeyed, driver, type, mask);
-		template += nr_unkeyed;
-	}
-
-	if (!err && nr_keyed)
-		err = __alg_test_hash(template, nr_keyed, driver, type, mask);
-
 	return err;
 }
 
@@ -2391,24 +2500,6 @@ static int alg_test_null(const struct alg_test_desc *desc,
 /* Please keep this list sorted by algorithm name. */
 static const struct alg_test_desc alg_test_descs[] = {
 	{
-		.alg = "adiantum(xchacha12,aes)",
-		.test = alg_test_skcipher,
-		.suite = {
-			.cipher = {
-				.enc = __VECS(adiantum_xchacha12_aes_enc_tv_template),
-				.dec = __VECS(adiantum_xchacha12_aes_dec_tv_template)
-			}
-		},
-	}, {
-		.alg = "adiantum(xchacha20,aes)",
-		.test = alg_test_skcipher,
-		.suite = {
-			.cipher = {
-				.enc = __VECS(adiantum_xchacha20_aes_enc_tv_template),
-				.dec = __VECS(adiantum_xchacha20_aes_dec_tv_template)
-			}
-		},
-	}, {
 		.alg = "ansi_cprng",
 		.test = alg_test_cprng,
 		.suite = {
@@ -2577,34 +2668,6 @@ static const struct alg_test_desc alg_test_descs[] = {
 		.test = alg_test_null,
 		.fips_allowed = 1,
 	}, {
-		.alg = "blake2b-160",
-		.test = alg_test_hash,
-		.fips_allowed = 0,
-		.suite = {
-			.hash = __VECS(blake2b_160_tv_template)
-		}
-	}, {
-		.alg = "blake2b-256",
-		.test = alg_test_hash,
-		.fips_allowed = 0,
-		.suite = {
-			.hash = __VECS(blake2b_256_tv_template)
-		}
-	}, {
-		.alg = "blake2b-384",
-		.test = alg_test_hash,
-		.fips_allowed = 0,
-		.suite = {
-			.hash = __VECS(blake2b_384_tv_template)
-		}
-	}, {
-		.alg = "blake2b-512",
-		.test = alg_test_hash,
-		.fips_allowed = 0,
-		.suite = {
-			.hash = __VECS(blake2b_512_tv_template)
-		}
-	}, {
 		.alg = "cbc(aes)",
 		.test = alg_test_skcipher,
 		.fips_allowed = 1,
@@ -2614,6 +2677,17 @@ static const struct alg_test_desc alg_test_descs[] = {
 				.dec = __VECS(aes_cbc_dec_tv_template)
 			}
 		}
+#ifdef CONFIG_CRYPTO_DISKCIPHER
+	}, {
+		.alg = "cbc(aes)-disk",
+		.test = alg_test_diskcipher,
+		.suite = {
+			.cipher = {
+				.enc = __VECS(aes_cbc_enc_tv_template),
+				.dec = __VECS(aes_cbc_dec_tv_template)
+			}
+		}
+#endif
 	}, {
 		.alg = "cbc(anubis)",
 		.test = alg_test_skcipher,
@@ -3122,6 +3196,24 @@ static const struct alg_test_desc alg_test_descs[] = {
 			}
 		}
 	}, {
+		.alg = "ecb(speck128)",
+		.test = alg_test_skcipher,
+		.suite = {
+			.cipher = {
+				.enc = __VECS(speck128_enc_tv_template),
+				.dec = __VECS(speck128_dec_tv_template)
+			}
+		}
+	}, {
+		.alg = "ecb(speck64)",
+		.test = alg_test_skcipher,
+		.suite = {
+			.cipher = {
+				.enc = __VECS(speck64_enc_tv_template),
+				.dec = __VECS(speck64_dec_tv_template)
+			}
+		}
+	}, {
 		.alg = "ecb(tea)",
 		.test = alg_test_skcipher,
 		.suite = {
@@ -3385,12 +3477,6 @@ static const struct alg_test_desc alg_test_descs[] = {
 			.hash = __VECS(michael_mic_tv_template)
 		}
 	}, {
-		.alg = "nhpoly1305",
-		.test = alg_test_hash,
-		.suite = {
-			.hash = __VECS(nhpoly1305_tv_template)
-		}
-	}, {
 		.alg = "ofb(aes)",
 		.test = alg_test_skcipher,
 		.fips_allowed = 1,
@@ -3642,24 +3728,6 @@ static const struct alg_test_desc alg_test_descs[] = {
 			.hash = __VECS(aes_xcbc128_tv_template)
 		}
 	}, {
-		.alg = "xchacha12",
-		.test = alg_test_skcipher,
-		.suite = {
-			.cipher = {
-				.enc = __VECS(xchacha12_tv_template),
-				.dec = __VECS(xchacha12_tv_template)
-			}
-		},
-	}, {
-		.alg = "xchacha20",
-		.test = alg_test_skcipher,
-		.suite = {
-			.cipher = {
-				.enc = __VECS(xchacha20_tv_template),
-				.dec = __VECS(xchacha20_tv_template)
-			}
-		},
-	}, {
 		.alg = "xts(aes)",
 		.test = alg_test_skcipher,
 		.fips_allowed = 1,
@@ -3669,6 +3737,17 @@ static const struct alg_test_desc alg_test_descs[] = {
 				.dec = __VECS(aes_xts_dec_tv_template)
 			}
 		}
+#ifdef CONFIG_CRYPTO_DISKCIPHER
+	}, {
+		.alg = "xts(aes)-disk",
+		.test = alg_test_diskcipher,
+		.suite = {
+			.cipher = {
+				.enc = __VECS(aes_xts_enc_tv_template),
+				.dec = __VECS(aes_xts_dec_tv_template)
+			}
+		}
+#endif
 	}, {
 		.alg = "xts(camellia)",
 		.test = alg_test_skcipher,
@@ -3694,6 +3773,24 @@ static const struct alg_test_desc alg_test_descs[] = {
 			.cipher = {
 				.enc = __VECS(serpent_xts_enc_tv_template),
 				.dec = __VECS(serpent_xts_dec_tv_template)
+			}
+		}
+	}, {
+		.alg = "xts(speck128)",
+		.test = alg_test_skcipher,
+		.suite = {
+			.cipher = {
+				.enc = __VECS(speck128_xts_enc_tv_template),
+				.dec = __VECS(speck128_xts_dec_tv_template)
+			}
+		}
+	}, {
+		.alg = "xts(speck64)",
+		.test = alg_test_skcipher,
+		.suite = {
+			.cipher = {
+				.enc = __VECS(speck64_xts_enc_tv_template),
+				.dec = __VECS(speck64_xts_dec_tv_template)
 			}
 		}
 	}, {
