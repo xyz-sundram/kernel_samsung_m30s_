@@ -265,14 +265,8 @@ static int tipc_nl_compat_dumpit(struct tipc_nl_compat_cmd_dump *cmd,
 	if (msg->rep_type)
 		tipc_tlv_init(msg->rep, msg->rep_type);
 
-	if (cmd->header) {
-		err = (*cmd->header)(msg);
-		if (err) {
-			kfree_skb(msg->rep);
-			msg->rep = NULL;
-			return err;
-		}
-	}
+	if (cmd->header)
+		(*cmd->header)(msg);
 
 	arg = nlmsg_new(0, GFP_KERNEL);
 	if (!arg) {
@@ -662,7 +656,7 @@ static int tipc_nl_compat_link_dump(struct tipc_nl_compat_msg *msg,
 	if (err)
 		return err;
 
-	link_info.dest = htonl(nla_get_flag(link[TIPC_NLA_LINK_DEST]));
+	link_info.dest = nla_get_flag(link[TIPC_NLA_LINK_DEST]);
 	link_info.up = htonl(nla_get_flag(link[TIPC_NLA_LINK_UP]));
 	nla_strlcpy(link_info.str, link[TIPC_NLA_LINK_NAME],
 		    TIPC_MAX_LINK_NAME);
@@ -856,7 +850,7 @@ static int tipc_nl_compat_name_table_dump_header(struct tipc_nl_compat_msg *msg)
 	};
 
 	ntq = (struct tipc_name_table_query *)TLV_DATA(msg->req);
-	if (TLV_GET_DATA_LEN(msg->req) < (int)sizeof(struct tipc_name_table_query))
+	if (TLV_GET_DATA_LEN(msg->req) < sizeof(struct tipc_name_table_query))
 		return -EINVAL;
 
 	depth = ntohl(ntq->depth);

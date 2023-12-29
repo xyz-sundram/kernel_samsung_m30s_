@@ -1331,7 +1331,7 @@ static enum calc_target_result calc_target(struct ceph_osd_client *osdc,
 	struct ceph_osds up, acting;
 	bool force_resend = false;
 	bool unpaused = false;
-	bool legacy_change = false;
+	bool legacy_change;
 	bool split = false;
 	bool sort_bitwise = ceph_osdmap_flag(osdc, CEPH_OSDMAP_SORTBITWISE);
 	bool recovery_deletes = ceph_osdmap_flag(osdc,
@@ -1427,14 +1427,15 @@ static enum calc_target_result calc_target(struct ceph_osd_client *osdc,
 		t->osd = acting.primary;
 	}
 
-	if (unpaused || legacy_change || force_resend || split)
+	if (unpaused || legacy_change || force_resend ||
+	    (split && con && CEPH_HAVE_FEATURE(con->peer_features,
+					       RESEND_ON_SPLIT)))
 		ct_res = CALC_TARGET_NEED_RESEND;
 	else
 		ct_res = CALC_TARGET_NO_ACTION;
 
 out:
-	dout("%s t %p -> %d%d%d%d ct_res %d osd%d\n", __func__, t, unpaused,
-	     legacy_change, force_resend, split, ct_res, t->osd);
+	dout("%s t %p -> ct_res %d osd %d\n", __func__, t, ct_res, t->osd);
 	return ct_res;
 }
 
@@ -3041,24 +3042,17 @@ static int linger_reg_commit_wait(struct ceph_osd_linger_request *lreq)
 	int ret;
 
 	dout("%s lreq %p linger_id %llu\n", __func__, lreq, lreq->linger_id);
-	ret = wait_for_completion_killable(&lreq->reg_commit_wait);
+	ret = wait_for_completion_interruptible(&lreq->reg_commit_wait);
 	return ret ?: lreq->reg_commit_error;
 }
 
-static int linger_notify_finish_wait(struct ceph_osd_linger_request *lreq,
-				     unsigned long timeout)
+static int linger_notify_finish_wait(struct ceph_osd_linger_request *lreq)
 {
-	long left;
+	int ret;
 
 	dout("%s lreq %p linger_id %llu\n", __func__, lreq, lreq->linger_id);
-	left = wait_for_completion_killable_timeout(&lreq->notify_finish_wait,
-						ceph_timeout_jiffies(timeout));
-	if (left <= 0)
-		left = left ?: -ETIMEDOUT;
-	else
-		left = lreq->notify_finish_error; /* completed */
-
-	return left;
+	ret = wait_for_completion_interruptible(&lreq->notify_finish_wait);
+	return ret ?: lreq->notify_finish_error;
 }
 
 /*
@@ -4673,8 +4667,7 @@ int ceph_osdc_notify(struct ceph_osd_client *osdc,
 
 	ret = linger_reg_commit_wait(lreq);
 	if (!ret)
-		ret = linger_notify_finish_wait(lreq,
-				 msecs_to_jiffies(2 * timeout * MSEC_PER_SEC));
+		ret = linger_notify_finish_wait(lreq);
 	else
 		dout("lreq %p failed to initiate notify %d\n", lreq, ret);
 

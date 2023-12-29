@@ -991,10 +991,9 @@ static int do_replace_finish(struct net *net, struct ebt_replace *repl,
 		goto free_iterate;
 	}
 
-	if (repl->valid_hooks != t->valid_hooks) {
-		ret = -EINVAL;
+	/* the table doesn't like it */
+	if (t->check && (ret = t->check(newinfo, repl->valid_hooks)))
 		goto free_unlock;
-	}
 
 	if (repl->num_counters && repl->num_counters != t->private->nentries) {
 		ret = -EINVAL;
@@ -1200,6 +1199,11 @@ int ebt_register_table(struct net *net, const struct ebt_table *input_table,
 	ret = translate_table(net, repl->name, newinfo);
 	if (ret != 0)
 		goto free_chainstack;
+
+	if (table->check && table->check(newinfo, table->valid_hooks)) {
+		ret = -EINVAL;
+		goto free_chainstack;
+	}
 
 	table->private = newinfo;
 	rwlock_init(&table->lock);
@@ -2270,10 +2274,8 @@ static int compat_do_replace(struct net *net, void __user *user,
 	state.buf_kern_len = size64;
 
 	ret = compat_copy_entries(entries_tmp, tmp.entries_size, &state);
-	if (WARN_ON(ret < 0)) {
-		vfree(entries_tmp);
+	if (WARN_ON(ret < 0))
 		goto out_unlock;
-	}
 
 	vfree(entries_tmp);
 	tmp.entries_size = size64;

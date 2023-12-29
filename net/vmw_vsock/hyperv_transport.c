@@ -280,11 +280,6 @@ static void hvs_close_connection(struct vmbus_channel *chan)
 	lock_sock(sk);
 	hvs_do_close_lock_held(vsock_sk(sk), true);
 	release_sock(sk);
-
-	/* Release the refcnt for the channel that's opened in
-	 * hvs_open_connection().
-	 */
-	sock_put(sk);
 }
 
 static void hvs_open_connection(struct vmbus_channel *chan)
@@ -356,9 +351,6 @@ static void hvs_open_connection(struct vmbus_channel *chan)
 	}
 
 	set_per_channel_state(chan, conn_from_host ? new : sk);
-
-	/* This reference will be dropped by hvs_close_connection(). */
-	sock_hold(conn_from_host ? new : sk);
 	vmbus_set_chn_rescind_callback(chan, hvs_close_connection);
 
 	/* Set the pending send size to max packet size to always get
@@ -444,10 +436,14 @@ static void hvs_shutdown_lock_held(struct hvsock *hvs, int mode)
 
 static int hvs_shutdown(struct vsock_sock *vsk, int mode)
 {
+	struct sock *sk = sk_vsock(vsk);
+
 	if (!(mode & SEND_SHUTDOWN))
 		return 0;
 
+	lock_sock(sk);
 	hvs_shutdown_lock_held(vsk->trans, mode);
+	release_sock(sk);
 	return 0;
 }
 
