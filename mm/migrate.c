@@ -1430,6 +1430,17 @@ int migrate_pages(struct list_head *from, new_page_t get_new_page,
 						private, page, pass > 2, mode,
 						reason);
 
+			if ((reason == MR_CMA) && (rc != -EAGAIN) &&
+						(rc != MIGRATEPAGE_SUCCESS)) {
+				phys_addr_t pa = page_to_phys(page);
+
+				pr_err("%s failed(%d): PA%pa,mapcnt%d,cnt%d\n",
+					__func__, rc, &pa,
+					page_mapcount(page), page_count(page));
+
+				dump_page_owner(page);
+			}
+
 			switch(rc) {
 			case -ENOMEM:
 				nr_failed++;
@@ -1651,7 +1662,7 @@ static int do_pages_move(struct mm_struct *mm, nodemask_t task_nodes,
 			err = -EFAULT;
 			if (get_user(p, pages + j + chunk_start))
 				goto out_pm;
-			pm[j].addr = (unsigned long)untagged_addr(p);
+			pm[j].addr = (unsigned long) p;
 
 			if (get_user(node, nodes + j + chunk_start))
 				goto out_pm;
@@ -2351,13 +2362,12 @@ next:
 		migrate->dst[migrate->npages] = 0;
 		migrate->src[migrate->npages++] = mpfn;
 	}
+	arch_leave_lazy_mmu_mode();
+	pte_unmap_unlock(ptep - 1, ptl);
 
 	/* Only flush the TLB if we actually modified any entries */
 	if (unmapped)
 		flush_tlb_range(walk->vma, start, end);
-
-	arch_leave_lazy_mmu_mode();
-	pte_unmap_unlock(ptep - 1, ptl);
 
 	return 0;
 }

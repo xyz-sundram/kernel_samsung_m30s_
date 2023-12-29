@@ -40,6 +40,18 @@
 #include <linux/psi.h>
 #include "internal.h"
 
+#ifdef CONFIG_PAGE_BOOST_RECORDING
+#include <linux/io_record.h>
+#endif
+
+#if defined(CONFIG_SDP)
+#include <sdp/cache_cleanup.h>
+#endif
+
+#ifdef CONFIG_FSCRYPT_SDP
+#include <linux/fscrypto_sdp_cache.h>
+#endif
+
 #define CREATE_TRACE_POINTS
 #include <trace/events/filemap.h>
 
@@ -189,6 +201,11 @@ void __delete_from_page_cache(struct page *page, void *shadow)
 {
 	struct address_space *mapping = page->mapping;
 	int nr = hpage_nr_pages(page);
+
+#if defined(CONFIG_SDP)
+	if (mapping_sensitive(mapping))
+		sdp_page_cleanup(page);
+#endif
 
 	trace_mm_filemap_delete_from_page_cache(page);
 	/*
@@ -2020,6 +2037,9 @@ static ssize_t generic_file_buffered_read(struct kiocb *iocb,
 	prev_offset = ra->prev_pos & (PAGE_SIZE-1);
 	last_index = (*ppos + iter->count + PAGE_SIZE-1) >> PAGE_SHIFT;
 	offset = *ppos & ~PAGE_MASK;
+#ifdef CONFIG_PAGE_BOOST_RECORDING
+	record_io_info(filp, index, last_index - index);
+#endif
 
 	for (;;) {
 		struct page *page;
@@ -2307,8 +2327,17 @@ generic_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 		    IS_DAX(inode))
 			goto out;
 	}
-
+#ifdef CONFIG_FSCRYPT_SDP
+	//Check after writeback is completed.
+	if (fscrypt_sdp_file_not_readable(iocb->ki_filp)) {
+		retval = -EIO;
+		goto out;
+	}
+#endif
 	retval = generic_file_buffered_read(iocb, iter, retval);
+#ifdef CONFIG_FSCRYPT_SDP
+	fscrypt_sdp_unset_file_io_ongoing(iocb->ki_filp);
+#endif
 out:
 	return retval;
 }
@@ -2316,97 +2345,35 @@ EXPORT_SYMBOL(generic_file_read_iter);
 
 #ifdef CONFIG_MMU
 #define MMAP_LOTSAMISS  (100)
-static struct file *maybe_unlock_mmap_for_io(struct vm_fault *vmf,
-					     struct file *fpin)
-{
-	int flags = vmf->flags;
 
-	if (fpin)
-		return fpin;
-
-	/*
-	 * FAULT_FLAG_RETRY_NOWAIT means we don't want to wait on page locks or
-	 * anything, so we only pin the file and drop the mmap_sem if only
-	 * FAULT_FLAG_ALLOW_RETRY is set.
-	 */
-	if ((flags & (FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_RETRY_NOWAIT)) ==
-	    FAULT_FLAG_ALLOW_RETRY) {
-		fpin = get_file(vmf->vma->vm_file);
-		up_read(&vmf->vma->vm_mm->mmap_sem);
-	}
-	return fpin;
-}
+#if CONFIG_MMAP_READAROUND_LIMIT == 0
+int mmap_readaround_limit = (VM_MAX_READAHEAD / 4); 		/* page */
+#else
+int mmap_readaround_limit = CONFIG_MMAP_READAROUND_LIMIT;	/* page */
+#endif
 
 /*
- * lock_page_maybe_drop_mmap - lock the page, possibly dropping the mmap_sem
- * @vmf - the vm_fault for this fault.
- * @page - the page to lock.
- * @fpin - the pointer to the file we may pin (or is already pinned).
- *
- * This works similar to lock_page_or_retry in that it can drop the mmap_sem.
- * It differs in that it actually returns the page locked if it returns 1 and 0
- * if it couldn't lock the page.  If we did have to drop the mmap_sem then fpin
- * will point to the pinned file and needs to be fput()'ed at a later point.
+ * Synchronous readahead happens when we don't even find
+ * a page in the page cache at all.
  */
-static int lock_page_maybe_drop_mmap(struct vm_fault *vmf, struct page *page,
-				     struct file **fpin)
+static void do_sync_mmap_readahead(struct vm_area_struct *vma,
+				   struct file_ra_state *ra,
+				   struct file *file,
+				   pgoff_t offset)
 {
-	if (trylock_page(page))
-		return 1;
-
-	/*
-	 * NOTE! This will make us return with VM_FAULT_RETRY, but with
-	 * the mmap_sem still held. That's how FAULT_FLAG_RETRY_NOWAIT
-	 * is supposed to work. We have way too many special cases..
-	 */
-	if (vmf->flags & FAULT_FLAG_RETRY_NOWAIT)
-		return 0;
-
-	*fpin = maybe_unlock_mmap_for_io(vmf, *fpin);
-	if (vmf->flags & FAULT_FLAG_KILLABLE) {
-		if (__lock_page_killable(page)) {
-			/*
-			 * We didn't have the right flags to drop the mmap_sem,
-			 * but all fault_handlers only check for fatal signals
-			 * if we return VM_FAULT_RETRY, so we need to drop the
-			 * mmap_sem here and return 0 if we don't have a fpin.
-			 */
-			if (*fpin == NULL)
-				up_read(&vmf->vma->vm_mm->mmap_sem);
-			return 0;
-		}
-	} else
-		__lock_page(page);
-	return 1;
-}
-
-
-/*
- * Synchronous readahead happens when we don't even find a page in the page
- * cache at all.  We don't want to perform IO under the mmap sem, so if we have
- * to drop the mmap sem we return the file that was pinned in order for us to do
- * that.  If we didn't pin a file then we return NULL.  The file that is
- * returned needs to be fput()'ed when we're done with it.
- */
-static struct file *do_sync_mmap_readahead(struct vm_fault *vmf)
-{
-	struct file *file = vmf->vma->vm_file;
-	struct file_ra_state *ra = &file->f_ra;
 	struct address_space *mapping = file->f_mapping;
-	struct file *fpin = NULL;
-	pgoff_t offset = vmf->pgoff;
+	unsigned int ra_pages;
 
 	/* If we don't want any read-ahead, don't bother */
-	if (vmf->vma->vm_flags & VM_RAND_READ)
-		return fpin;
+	if (vma->vm_flags & VM_RAND_READ)
+		return;
 	if (!ra->ra_pages)
-		return fpin;
+		return;
 
-	if (vmf->vma->vm_flags & VM_SEQ_READ) {
-		fpin = maybe_unlock_mmap_for_io(vmf, fpin);
+	if (vma->vm_flags & VM_SEQ_READ) {
 		page_cache_sync_readahead(mapping, ra, file, offset,
 					  ra->ra_pages);
-		return fpin;
+		return;
 	}
 
 	/* Avoid banging the cache line if not needed */
@@ -2418,44 +2385,38 @@ static struct file *do_sync_mmap_readahead(struct vm_fault *vmf)
 	 * stop bothering with read-ahead. It will only hurt.
 	 */
 	if (ra->mmap_miss > MMAP_LOTSAMISS)
-		return fpin;
+		return;
 
 	/*
 	 * mmap read-around
 	 */
-	fpin = maybe_unlock_mmap_for_io(vmf, fpin);
-	ra->start = max_t(long, 0, offset - ra->ra_pages / 2);
-	ra->size = ra->ra_pages;
-	ra->async_size = ra->ra_pages / 4;
+	ra_pages = min_t(unsigned int, ra->ra_pages, mmap_readaround_limit);
+	ra->start = max_t(long, 0, offset - ra_pages / 2);
+	ra->size = ra_pages;
+	ra->async_size = ra_pages / 4;
 	ra_submit(ra, mapping, file);
-	return fpin;
 }
 
 /*
  * Asynchronous readahead happens when we find the page and PG_readahead,
- * so we want to possibly extend the readahead further.  We return the file that
- * was pinned if we have to drop the mmap_sem in order to do IO.
+ * so we want to possibly extend the readahead further..
  */
-static struct file *do_async_mmap_readahead(struct vm_fault *vmf,
-					    struct page *page)
+static void do_async_mmap_readahead(struct vm_area_struct *vma,
+				    struct file_ra_state *ra,
+				    struct file *file,
+				    struct page *page,
+				    pgoff_t offset)
 {
-	struct file *file = vmf->vma->vm_file;
-	struct file_ra_state *ra = &file->f_ra;
 	struct address_space *mapping = file->f_mapping;
-	struct file *fpin = NULL;
-	pgoff_t offset = vmf->pgoff;
 
 	/* If we don't want any read-ahead, don't bother */
-	if (vmf->vma->vm_flags & VM_RAND_READ)
-		return fpin;
+	if (vma->vm_flags & VM_RAND_READ || !ra->ra_pages)
+		return;
 	if (ra->mmap_miss > 0)
 		ra->mmap_miss--;
-	if (PageReadahead(page)) {
-		fpin = maybe_unlock_mmap_for_io(vmf, fpin);
+	if (PageReadahead(page))
 		page_cache_async_readahead(mapping, ra, file,
 					   page, offset, ra->ra_pages);
-	}
-	return fpin;
 }
 
 /**
@@ -2485,7 +2446,6 @@ int filemap_fault(struct vm_fault *vmf)
 {
 	int error;
 	struct file *file = vmf->vma->vm_file;
-	struct file *fpin = NULL;
 	struct address_space *mapping = file->f_mapping;
 	struct file_ra_state *ra = &file->f_ra;
 	struct inode *inode = mapping->host;
@@ -2507,26 +2467,25 @@ int filemap_fault(struct vm_fault *vmf)
 		 * We found the page, so try async readahead before
 		 * waiting for the lock.
 		 */
-		fpin = do_async_mmap_readahead(vmf, page);
+		do_async_mmap_readahead(vmf->vma, ra, file, page, offset);
 	} else if (!page) {
 		/* No page in the page cache at all */
+		do_sync_mmap_readahead(vmf->vma, ra, file, offset);
 		count_vm_event(PGMAJFAULT);
 		count_memcg_event_mm(vmf->vma->vm_mm, PGMAJFAULT);
 		ret = VM_FAULT_MAJOR;
-		fpin = do_sync_mmap_readahead(vmf);
 retry_find:
 		page = pagecache_get_page(mapping, offset,
 					  FGP_CREAT|FGP_FOR_MMAP,
 					  vmf->gfp_mask);
-		if (!page) {
-			if (fpin)
-				goto out_retry;
+		if (!page)
 			return VM_FAULT_OOM;
-		}
 	}
 
-	if (!lock_page_maybe_drop_mmap(vmf, page, &fpin))
-		goto out_retry;
+	if (!lock_page_or_retry(page, vmf->vma->vm_mm, vmf->flags)) {
+		put_page(page);
+		return ret | VM_FAULT_RETRY;
+	}
 
 	/* Did it get truncated? */
 	if (unlikely(page->mapping != mapping)) {
@@ -2542,16 +2501,6 @@ retry_find:
 	 */
 	if (unlikely(!PageUptodate(page)))
 		goto page_not_uptodate;
-
-	/*
-	 * We've made it this far and we had to drop our mmap_sem, now is the
-	 * time to return to the upper layer and have it re-find the vma and
-	 * redo the fault.
-	 */
-	if (fpin) {
-		unlock_page(page);
-		goto out_retry;
-	}
 
 	/*
 	 * Found the page and have a reference on it.
@@ -2575,15 +2524,12 @@ page_not_uptodate:
 	 * and we need to check for errors.
 	 */
 	ClearPageError(page);
-	fpin = maybe_unlock_mmap_for_io(vmf, fpin);
 	error = mapping->a_ops->readpage(file, page);
 	if (!error) {
 		wait_on_page_locked(page);
 		if (!PageUptodate(page))
 			error = -EIO;
 	}
-	if (fpin)
-		goto out_retry;
 	put_page(page);
 
 	if (!error || error == AOP_TRUNCATED_PAGE)
@@ -2592,18 +2538,6 @@ page_not_uptodate:
 	/* Things didn't work out. Return zero to tell the mm layer so. */
 	shrink_readahead_size_eio(file, ra);
 	return VM_FAULT_SIGBUS;
-
-out_retry:
-	/*
-	 * We dropped the mmap_sem, we need to return to the fault handler to
-	 * re-find the vma and come back and find our hopefully still populated
-	 * page.
-	 */
-	if (page)
-		put_page(page);
-	if (fpin)
-		fput(fpin);
-	return ret | VM_FAULT_RETRY;
 }
 EXPORT_SYMBOL(filemap_fault);
 
@@ -2688,6 +2622,11 @@ next:
 			break;
 	}
 	rcu_read_unlock();
+
+#ifdef CONFIG_PAGE_BOOST_RECORDING
+	/* end_pgoff is inclusive */
+	record_io_info(file, start_pgoff, last_pgoff - start_pgoff + 1);
+#endif
 }
 EXPORT_SYMBOL(filemap_map_pages);
 
@@ -2931,9 +2870,6 @@ inline ssize_t generic_write_checks(struct kiocb *iocb, struct iov_iter *from)
 	unsigned long limit = rlimit(RLIMIT_FSIZE);
 	loff_t pos;
 
-	if (IS_SWAPFILE(inode))
-		return -ETXTBSY;
-
 	if (!iov_iter_count(from))
 		return 0;
 
@@ -3114,7 +3050,7 @@ ssize_t generic_perform_write(struct file *file,
 		unsigned long offset;	/* Offset into pagecache page */
 		unsigned long bytes;	/* Bytes to write to page */
 		size_t copied;		/* Bytes copied from user */
-		void *fsdata = NULL;
+		void *fsdata;
 
 		offset = (pos & (PAGE_SIZE - 1));
 		bytes = min_t(unsigned long, PAGE_SIZE - offset,
