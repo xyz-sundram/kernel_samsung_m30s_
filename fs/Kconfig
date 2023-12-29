@@ -8,6 +8,24 @@ menu "File systems"
 config DCACHE_WORD_ACCESS
        bool
 
+config INTERRUPTIBLE_SYNC
+        bool "Support interruptible sync for Samsung Mobile Device"
+	default y
+
+choice
+	prompt "Default mount option (RELATIME/NOATIME)"
+	default DEFAULT_MNT_RELATIME
+	help
+	  Select default mount option.
+
+	config DEFAULT_MNT_RELATIME
+		bool "RELATIME"
+
+	config DEFAULT_MNT_NOATIME
+		bool "NOATIME"
+endchoice
+
+
 if BLOCK
 
 config FS_IOMAP
@@ -97,8 +115,6 @@ config MANDATORY_FILE_LOCKING
 
 source "fs/crypto/Kconfig"
 
-source "fs/verity/Kconfig"
-
 source "fs/notify/Kconfig"
 
 source "fs/quota/Kconfig"
@@ -128,6 +144,7 @@ if BLOCK
 menu "DOS/FAT/NT Filesystems"
 
 source "fs/fat/Kconfig"
+source "fs/sdfat/Kconfig"
 source "fs/ntfs/Kconfig"
 
 endmenu
@@ -311,6 +328,5 @@ endif # NETWORK_FILESYSTEMS
 
 source "fs/nls/Kconfig"
 source "fs/dlm/Kconfig"
-source "fs/unicode/Kconfig"
 
 endmenu

@@ -4078,17 +4078,6 @@ static int process_recorded_refs(struct send_ctx *sctx, int *pending_move)
 				if (ret < 0)
 					goto out;
 			} else {
-				/*
-				 * If we previously orphanized a directory that
-				 * collided with a new reference that we already
-				 * processed, recompute the current path because
-				 * that directory may be part of the path.
-				 */
-				if (orphanized_dir) {
-					ret = refresh_ref_path(sctx, cur);
-					if (ret < 0)
-						goto out;
-				}
 				ret = send_unlink(sctx, cur->full_path);
 				if (ret < 0)
 					goto out;
@@ -4944,10 +4933,6 @@ static ssize_t fill_read_buf(struct send_ctx *sctx, u64 offset, u32 len)
 			lock_page(page);
 			if (!PageUptodate(page)) {
 				unlock_page(page);
-				btrfs_err(fs_info,
-			"send: IO error at offset %llu for inode %llu root %llu",
-					page_offset(page), sctx->cur_ino,
-					sctx->send_root->root_key.objectid);
 				put_page(page);
 				ret = -EIO;
 				break;
@@ -6646,10 +6631,10 @@ long btrfs_ioctl_send(struct file *mnt_file, void __user *arg_)
 	/*
 	 * Check that we don't overflow at later allocations, we request
 	 * clone_sources_count + 1 items, and compare to unsigned long inside
-	 * access_ok. Also set an upper limit for allocation size so this can't
-	 * easily exhaust memory. Max number of clone sources is about 200K.
+	 * access_ok.
 	 */
-	if (arg->clone_sources_count > SZ_8M / sizeof(struct clone_root)) {
+	if (arg->clone_sources_count >
+	    ULONG_MAX / sizeof(struct clone_root) - 1) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -6680,7 +6665,7 @@ long btrfs_ioctl_send(struct file *mnt_file, void __user *arg_)
 	sctx->flags = arg->flags;
 
 	sctx->send_filp = fget(arg->send_fd);
-	if (!sctx->send_filp || !(sctx->send_filp->f_mode & FMODE_WRITE)) {
+	if (!sctx->send_filp) {
 		ret = -EBADF;
 		goto out;
 	}

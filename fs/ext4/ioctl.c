@@ -24,6 +24,10 @@
 #include "fsmap.h"
 #include <trace/events/ext4.h>
 
+#ifdef CONFIG_FSCRYPT_SDP
+#include <linux/fscrypto_sdp_ioctl.h>
+#endif
+
 /**
  * Swap memory between @a and @b for @len bytes.
  *
@@ -141,7 +145,7 @@ static long swap_inode_boot_loader(struct super_block *sb,
 	/* Protect extent tree against block allocations via delalloc */
 	ext4_double_down_write_data_sem(inode, inode_bl);
 
-	if (is_bad_inode(inode_bl) || !S_ISREG(inode_bl->i_mode)) {
+	if (inode_bl->i_nlink == 0) {
 		/* this inode has never been used as a BOOT_LOADER */
 		set_nlink(inode_bl, 1);
 		i_uid_write(inode_bl, 0);
@@ -150,7 +154,6 @@ static long swap_inode_boot_loader(struct super_block *sb,
 		ei_bl->i_flags = 0;
 		inode_bl->i_version = 1;
 		i_size_write(inode_bl, 0);
-		EXT4_I(inode_bl)->i_disksize = inode_bl->i_size;
 		inode_bl->i_mode = S_IFREG;
 		if (ext4_has_feature_extents(sb)) {
 			ext4_set_inode_flag(inode_bl, EXT4_INODE_EXTENTS);
@@ -199,7 +202,7 @@ journal_err_out:
 	return err;
 }
 
-#ifdef CONFIG_FS_ENCRYPTION
+#ifdef CONFIG_EXT4_FS_ENCRYPTION
 static int uuid_is_zero(__u8 u[16])
 {
 	int	i;
@@ -243,7 +246,6 @@ static int ext4_ioctl_setflags(struct inode *inode,
 	struct ext4_iloc iloc;
 	unsigned int oldflags, mask, i;
 	unsigned int jflag;
-	struct super_block *sb = inode->i_sb;
 
 	/* Is it quota file? Do not allow user to mess with it */
 	if (ext4_is_quota_file(inode))
@@ -286,23 +288,6 @@ static int ext4_ioctl_setflags(struct inode *inode,
 		err = ext4_truncate(inode);
 		if (err)
 			goto flags_out;
-	}
-
-	if ((flags ^ oldflags) & EXT4_CASEFOLD_FL) {
-		if (!ext4_has_feature_casefold(sb)) {
-			err = -EOPNOTSUPP;
-			goto flags_out;
-		}
-
-		if (!S_ISDIR(inode->i_mode)) {
-			err = -ENOTDIR;
-			goto flags_out;
-		}
-
-		if (!ext4_empty_dir(inode)) {
-			err = -ENOTEMPTY;
-			goto flags_out;
-		}
 	}
 
 	/*
@@ -409,10 +394,6 @@ static int ext4_ioctl_setproject(struct file *filp, __u32 projid)
 	if (ext4_is_quota_file(inode))
 		return err;
 
-	err = dquot_initialize(inode);
-	if (err)
-		return err;
-
 	err = ext4_get_inode_loc(inode, &iloc);
 	if (err)
 		return err;
@@ -427,6 +408,10 @@ static int ext4_ioctl_setproject(struct file *filp, __u32 projid)
 	} else {
 		brelse(iloc.bh);
 	}
+
+	err = dquot_initialize(inode);
+	if (err)
+		return err;
 
 	handle = ext4_journal_start(inode, EXT4_HT_QUOTA,
 		EXT4_QUOTA_INIT_BLOCKS(sb) +
@@ -1011,6 +996,8 @@ resizefs_out:
 		    sizeof(range)))
 			return -EFAULT;
 
+		range.minlen = max((unsigned int)range.minlen,
+				   q->limits.discard_granularity);
 		ret = ext4_trim_fs(sb, &range);
 		if (ret < 0)
 			return ret;
@@ -1030,7 +1017,7 @@ resizefs_out:
 		return fscrypt_ioctl_set_policy(filp, (const void __user *)arg);
 
 	case EXT4_IOC_GET_ENCRYPTION_PWSALT: {
-#ifdef CONFIG_FS_ENCRYPTION
+#ifdef CONFIG_EXT4_FS_ENCRYPTION
 		int err, err2;
 		struct ext4_sb_info *sbi = EXT4_SB(sb);
 		handle_t *handle;
@@ -1073,39 +1060,7 @@ resizefs_out:
 #endif
 	}
 	case EXT4_IOC_GET_ENCRYPTION_POLICY:
-		if (!ext4_has_feature_encrypt(sb))
-			return -EOPNOTSUPP;
 		return fscrypt_ioctl_get_policy(filp, (void __user *)arg);
-
-	case FS_IOC_GET_ENCRYPTION_POLICY_EX:
-		if (!ext4_has_feature_encrypt(sb))
-			return -EOPNOTSUPP;
-		return fscrypt_ioctl_get_policy_ex(filp, (void __user *)arg);
-
-	case FS_IOC_ADD_ENCRYPTION_KEY:
-		if (!ext4_has_feature_encrypt(sb))
-			return -EOPNOTSUPP;
-		return fscrypt_ioctl_add_key(filp, (void __user *)arg);
-
-	case FS_IOC_REMOVE_ENCRYPTION_KEY:
-		if (!ext4_has_feature_encrypt(sb))
-			return -EOPNOTSUPP;
-		return fscrypt_ioctl_remove_key(filp, (void __user *)arg);
-
-	case FS_IOC_REMOVE_ENCRYPTION_KEY_ALL_USERS:
-		if (!ext4_has_feature_encrypt(sb))
-			return -EOPNOTSUPP;
-		return fscrypt_ioctl_remove_key_all_users(filp,
-							  (void __user *)arg);
-	case FS_IOC_GET_ENCRYPTION_KEY_STATUS:
-		if (!ext4_has_feature_encrypt(sb))
-			return -EOPNOTSUPP;
-		return fscrypt_ioctl_get_key_status(filp, (void __user *)arg);
-
-	case FS_IOC_GET_ENCRYPTION_NONCE:
-		if (!ext4_has_feature_encrypt(sb))
-			return -EOPNOTSUPP;
-		return fscrypt_ioctl_get_nonce(filp, (void __user *)arg);
 
 	case EXT4_IOC_FSGETXATTR:
 	{
@@ -1169,15 +1124,20 @@ out:
 	case EXT4_IOC_SHUTDOWN:
 		return ext4_shutdown(sb, arg);
 
-	case FS_IOC_ENABLE_VERITY:
-		if (!ext4_has_feature_verity(sb))
-			return -EOPNOTSUPP;
-		return fsverity_ioctl_enable(filp, (const void __user *)arg);
-
-	case FS_IOC_MEASURE_VERITY:
-		if (!ext4_has_feature_verity(sb))
-			return -EOPNOTSUPP;
-		return fsverity_ioctl_measure(filp, (void __user *)arg);
+#ifdef CONFIG_DDAR
+	case EXT4_IOC_GET_DD_POLICY:
+	case EXT4_IOC_SET_DD_POLICY:
+		return fscrypt_dd_ioctl(cmd, &arg, inode);
+#endif
+#ifdef CONFIG_FSCRYPT_SDP
+	case FS_IOC_GET_SDP_INFO:
+	case FS_IOC_SET_SDP_POLICY:
+	case FS_IOC_SET_SENSITIVE:
+	case FS_IOC_SET_PROTECTED:
+	case FS_IOC_ADD_CHAMBER:
+	case FS_IOC_REMOVE_CHAMBER:
+		return fscrypt_sdp_ioctl(filp, cmd, arg);
+#endif
 
 	default:
 		return -ENOTTY;
@@ -1245,16 +1205,16 @@ long ext4_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	case EXT4_IOC_SET_ENCRYPTION_POLICY:
 	case EXT4_IOC_GET_ENCRYPTION_PWSALT:
 	case EXT4_IOC_GET_ENCRYPTION_POLICY:
-	case FS_IOC_GET_ENCRYPTION_POLICY_EX:
-	case FS_IOC_ADD_ENCRYPTION_KEY:
-	case FS_IOC_REMOVE_ENCRYPTION_KEY:
-	case FS_IOC_REMOVE_ENCRYPTION_KEY_ALL_USERS:
-	case FS_IOC_GET_ENCRYPTION_KEY_STATUS:
-	case FS_IOC_GET_ENCRYPTION_NONCE:
 	case EXT4_IOC_SHUTDOWN:
 	case FS_IOC_GETFSMAP:
-	case FS_IOC_ENABLE_VERITY:
-	case FS_IOC_MEASURE_VERITY:
+#ifdef CONFIG_FSCRYPT_SDP
+	case FS_IOC_GET_SDP_INFO:
+	case FS_IOC_SET_SDP_POLICY:
+	case FS_IOC_SET_SENSITIVE:
+	case FS_IOC_SET_PROTECTED:
+	case FS_IOC_ADD_CHAMBER:
+	case FS_IOC_REMOVE_CHAMBER:
+#endif
 	case EXT4_IOC_FSGETXATTR:
 	case EXT4_IOC_FSSETXATTR:
 		break;
