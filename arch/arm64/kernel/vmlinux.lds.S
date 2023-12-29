@@ -163,7 +163,7 @@ SECTIONS
 		__alt_instructions_end = .;
 	}
 	.altinstr_replacement : {
-		*(.altinstr_replacement)
+		KEEP(*(.altinstr_replacement))
 	}
 
 	. = ALIGN(PAGE_SIZE);
@@ -191,15 +191,6 @@ SECTIONS
 
 	__rela_offset	= ABSOLUTE(ADDR(.rela.dyn) - KIMAGE_VADDR);
 	__rela_size	= SIZEOF(.rela.dyn);
-
-#ifdef CONFIG_RELR
-	.relr.dyn : ALIGN(8) {
-		*(.relr.dyn)
-	}
-
-	__relr_offset	= ABSOLUTE(ADDR(.relr.dyn) - KIMAGE_VADDR);
-	__relr_size	= SIZEOF(.relr.dyn);
-#endif
 
 	. = ALIGN(SEGMENT_ALIGN);
 	__initdata_end = .;
@@ -234,6 +225,7 @@ SECTIONS
 	BSS_SECTION(0, 0, 0)
 
 	. = ALIGN(PAGE_SIZE);
+#ifndef CONFIG_UH_RKP
 	idmap_pg_dir = .;
 	. += IDMAP_DIR_SIZE;
 	swapper_pg_dir = .;
@@ -247,6 +239,7 @@ SECTIONS
 #ifdef CONFIG_UNMAP_KERNEL_AT_EL0
 	tramp_pg_dir = .;
 	. += PAGE_SIZE;
+#endif
 #endif
 
 	__pecoff_data_size = ABSOLUTE(. - __initdata_begin);
@@ -270,7 +263,7 @@ ASSERT(__hibernate_exit_text_end - (__hibernate_exit_text_start & ~(SZ_4K - 1))
 	<= SZ_4K, "Hibernate exit text too big or misaligned")
 #endif
 #ifdef CONFIG_UNMAP_KERNEL_AT_EL0
-ASSERT((__entry_tramp_text_end - __entry_tramp_text_start) <= 3*PAGE_SIZE,
+ASSERT((__entry_tramp_text_end - __entry_tramp_text_start) == PAGE_SIZE,
 	"Entry trampoline text too big")
 #endif
 /*
