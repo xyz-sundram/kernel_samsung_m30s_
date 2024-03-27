@@ -7,7 +7,7 @@ SECONDS=0 # builtin bash timer
 ZIPNAME="Twilight-m30s-$(date '+%Y%m%d-%H%M').zip"
 TC_DIR="$(pwd)/tc/clang-r399163b1"
 AK3_DIR="$(pwd)/android/AnyKernel3"
-DEFCONFIG="m30s-Twilight_defconfig"
+DEFCONFIG="m30s_defconfig"
 
 if test -z "$(git rev-parse --show-cdup 2>/dev/null)" &&
    head=$(git rev-parse --verify HEAD 2>/dev/null); then
